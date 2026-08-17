@@ -14,6 +14,7 @@
     "identity:setup": "node packages/agent/dist/identity.js keygen && node packages/agent/dist/identity.js mint",
     "observability:up": "finch compose -f infra/observability-compose.yaml up -d",
     "observability:down": "finch compose -f infra/observability-compose.yaml down",
+    "scenario:step": "node scripts/scenario-step.mjs",
     "test": "pnpm -r build && node --test 'packages/*/dist/**/*.test.js' 'scripts/**/*.test.mjs'",
     "demo": "bash scripts/demo.sh"
   },

@@ -86,5 +86,10 @@ sleep 2
 
 # --- 4. agent loop ----------------------------------------------------------
 echo "[demo] starting agent loop. Watch http://localhost:8090 (and Grafana :3001)."
+if [[ "${SCENARIO_MODE:-timed}" == "manual" ]]; then
+  echo "[demo] MANUAL scenario mode: no market events fire until you advance a beat."
+  echo "[demo]   in another pane, run:  pnpm scenario:step   (press Enter to advance each beat)"
+  echo "[demo]   or:  curl -X POST http://127.0.0.1:${SCENARIO_CONTROL_PORT:-8091}/scenario/next"
+fi
 echo "[demo] follow packages/control-plane/RUNBOOK.md for narration. Ctrl-C to stop."
 bash packages/agent/run-loop.sh

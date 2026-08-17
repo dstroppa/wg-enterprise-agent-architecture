@@ -4,8 +4,18 @@
  * Runs inside the mcp-market-data process (same process, per the design
  * decision: the market-data feed is the only thing the driver touches, so no
  * IPC is needed). It reads seed/scenario-timeline.json and applies each event
- * to the MarketDataStore at its scheduled offset, making the "continuous market
- * moving" behaviour visible in a short demo.
+ * to the MarketDataStore, making the "continuous market moving" behaviour
+ * visible in a short demo.
+ *
+ * Two modes:
+ *   - timed  (default): each event fires on a setTimeout at atSeconds*tickScale,
+ *             so the whole timeline plays on its own — good for an unattended
+ *             run or a hands-off rehearsal.
+ *   - manual: nothing fires on a clock. Events are grouped into demo BEATS and
+ *             the presenter advances one beat per stepBeat() call, so each
+ *             dramatic moment lands exactly when narrated. The trigger surface
+ *             (HTTP / terminal) lives in index.ts; this class just owns the
+ *             grouping and the "apply the next group" step.
  *
  * Logging goes to stderr so it never corrupts the MCP stdio transport on stdout.
  */
@@ -43,15 +53,41 @@ interface Timeline {
   events: TimelineEvent[];
 }
 
+export type ScenarioMode = "timed" | "manual";
+
+/** A group of timeline events the presenter advances through as one unit. */
+export interface Beat {
+  /** Beat number: from the events' `demoBeat`, or 0 for the ambient steady-state group. */
+  beat: number;
+  /** The `phase` string shared by the beat's events (for narration), if any. */
+  phase?: string;
+  events: TimelineEvent[];
+}
+
+/** What a single stepBeat() applied, so the trigger surface can report it. */
+export interface StepResult {
+  /** The beat just applied, or null if there was nothing left to apply. */
+  beat: number | null;
+  phase?: string;
+  /** One line per event applied, e.g. "demand MER-HYD-2L -> rising 40% (applied)". */
+  applied: string[];
+  /** Beats still waiting after this step. */
+  remaining: number;
+  /** True once the last beat has been applied. */
+  done: boolean;
+}
+
 function log(msg: string): void {
   process.stderr.write(`[scenario-driver] ${msg}\n`);
 }
 
 export interface ScenarioDriverOptions {
-  /** Multiplier applied to each event's atSeconds. 1 = real time. */
+  /** Multiplier applied to each event's atSeconds (timed mode only). 1 = real time. */
   tickScale?: number;
-  /** Restart the timeline from the top after it finishes. */
+  /** Restart the timeline from the top after it finishes (timed mode only). */
   loop?: boolean;
+  /** "timed" (default) fires on a clock; "manual" advances one beat per stepBeat(). */
+  mode?: ScenarioMode;
 }
 
 export class ScenarioDriver {
@@ -60,6 +96,11 @@ export class ScenarioDriver {
   private readonly options: Required<ScenarioDriverOptions>;
   private running = false;
 
+  /** Beats in advance order (ambient beat 0 first, then ascending). Manual mode. */
+  private readonly beats: Beat[];
+  /** Index of the next beat stepBeat() will apply. Manual mode. */
+  private nextBeatIndex = 0;
+
   constructor(
     private readonly store: MarketDataStore,
     options: ScenarioDriverOptions = {},
@@ -67,20 +108,64 @@ export class ScenarioDriver {
     this.options = {
       tickScale: options.tickScale ?? 1,
       loop: options.loop ?? false,
+      mode: options.mode ?? "timed",
     };
     this.timeline = JSON.parse(
       readFileSync(resolve(SEED_DIR, "scenario-timeline.json"), "utf8"),
     ) as Timeline;
+    this.beats = groupIntoBeats(this.timeline.events);
+  }
+
+  get isManual(): boolean {
+    return this.options.mode === "manual";
+  }
+
+  /** The beat grouping, exposed for the trigger surface and for tests. */
+  getBeats(): readonly Beat[] {
+    return this.beats;
   }
 
   start(): void {
     if (this.running) return;
     this.running = true;
+
+    if (this.isManual) {
+      log(
+        `manual mode: ${this.beats.length} beats ready ` +
+          `(${this.beats.map((b) => b.beat).join(", ")}). Advance with stepBeat().`,
+      );
+      return; // nothing fires until the presenter advances
+    }
+
     log(
       `starting timeline: ${this.timeline.events.length} events over ` +
         `${this.timeline.durationSeconds}s (tickScale=${this.options.tickScale}, loop=${this.options.loop})`,
     );
     this.scheduleAll();
+  }
+
+  /**
+   * Manual mode: apply the next beat's events and report what happened.
+   * Idempotent past the end — extra calls return {beat:null, done:true}.
+   */
+  stepBeat(): StepResult {
+    if (this.nextBeatIndex >= this.beats.length) {
+      return { beat: null, applied: [], remaining: 0, done: true };
+    }
+    const group = this.beats[this.nextBeatIndex]!; // guarded by the bounds check above
+    this.nextBeatIndex++;
+    const applied = group.events.map((e) => this.apply(e));
+    const remaining = this.beats.length - this.nextBeatIndex;
+    log(
+      `beat ${group.beat}${group.phase ? ` (${group.phase})` : ""}: applied ${applied.length} event(s), ${remaining} beat(s) remaining`,
+    );
+    return {
+      beat: group.beat,
+      phase: group.phase,
+      applied,
+      remaining,
+      done: remaining === 0,
+    };
   }
 
   private scheduleAll(): void {
@@ -101,19 +186,18 @@ export class ScenarioDriver {
     }
   }
 
-  private apply(event: TimelineEvent): void {
+  /** Apply one event to the store; returns a one-line human-readable summary. */
+  private apply(event: TimelineEvent): string {
     const beat = event.demoBeat ? ` [demo beat ${event.demoBeat}]` : "";
+    const prefix = `${event.phase ?? ""}${beat}`;
+    let line: string;
     switch (event.type) {
       case "competitor_price_change": {
         if (event.sku && event.competitor && event.newPrice !== undefined) {
-          const ok = this.store.setCompetitorPrice(
-            event.sku,
-            event.competitor,
-            event.newPrice,
-          );
-          log(
-            `${event.phase ?? ""}${beat} competitor ${event.competitor} on ${event.sku} -> $${event.newPrice} (${ok ? "applied" : "unknown SKU"})`,
-          );
+          const ok = this.store.setCompetitorPrice(event.sku, event.competitor, event.newPrice);
+          line = `competitor ${event.competitor} on ${event.sku} -> $${event.newPrice} (${ok ? "applied" : "unknown SKU"})`;
+        } else {
+          line = `competitor_price_change skipped (incomplete event)`;
         }
         break;
       }
@@ -125,35 +209,38 @@ export class ScenarioDriver {
             event.magnitude,
             event.reason ?? "",
           );
-          log(
-            `${event.phase ?? ""}${beat} demand ${event.sku} -> ${event.trend} ${(event.magnitude * 100).toFixed(0)}% (${ok ? "applied" : "unknown SKU"})`,
-          );
+          line = `demand ${event.sku} -> ${event.trend} ${(event.magnitude * 100).toFixed(0)}% (${ok ? "applied" : "unknown SKU"})`;
+        } else {
+          line = `demand_signal skipped (incomplete event)`;
         }
         break;
       }
       case "inventory_update": {
         if (event.sku && event.onHandDelta !== undefined) {
           const ok = this.store.adjustInventory(event.sku, event.onHandDelta);
-          log(
-            `${event.phase ?? ""}${beat} inventory ${event.sku} delta ${event.onHandDelta} (${ok ? "applied" : "unknown SKU"})`,
-          );
+          line = `inventory ${event.sku} delta ${event.onHandDelta} (${ok ? "applied" : "unknown SKU"})`;
+        } else {
+          line = `inventory_update skipped (incomplete event)`;
         }
         break;
       }
       case "competitor_prices_bulk_update": {
-        if (!event.source) break;
-        if (event.restoreBaseline) {
+        if (!event.source) {
+          line = `competitor_prices_bulk_update skipped (no source)`;
+        } else if (event.restoreBaseline) {
           const n = this.store.restoreCompetitorBaselineBySource(event.source);
-          log(`${event.phase ?? ""}${beat} restored ${n} ${event.source} quotes to baseline`);
+          line = `restored ${n} ${event.source} quotes to baseline`;
         } else if (event.newPrice !== undefined) {
           const n = this.store.bulkSetCompetitorPriceBySource(event.source, event.newPrice);
-          log(
-            `${event.phase ?? ""}${beat} GLITCH: set ${n} ${event.source} quotes -> $${event.newPrice}`,
-          );
+          line = `GLITCH: set ${n} ${event.source} quotes -> $${event.newPrice}`;
+        } else {
+          line = `competitor_prices_bulk_update skipped (no newPrice/restoreBaseline)`;
         }
         break;
       }
     }
+    log(`${prefix} ${line}`);
+    return line;
   }
 
   stop(): void {
@@ -162,4 +249,40 @@ export class ScenarioDriver {
     this.running = false;
     log("stopped");
   }
+}
+
+/**
+ * Group timeline events into ordered beats.
+ *
+ * The grouping key is `phase`, not `demoBeat`: only the FIRST event of each beat
+ * carries a `demoBeat` tag, but every event in a beat shares the same `phase`
+ * (verified against the seed). Grouping by `demoBeat ?? 0` would wrongly sweep a
+ * beat's untagged continuation events (e.g. the demand rise that accompanies the
+ * competitor undercut) into the ambient group, so a step would fire an incomplete
+ * beat. Grouping by `phase` keeps each beat whole.
+ *
+ * Beats are ordered by their earliest event (so steady-state opens, recovery
+ * closes), event order within a beat is preserved, and the display `beat` number
+ * is taken from whichever event in the group carries a `demoBeat` (0 for the
+ * ambient steady-state group that has none). Beat numbers need not be contiguous:
+ * the timeline has no beat 1 (M1 was identity, not a market event).
+ *
+ * Exported so tests can assert the grouping directly against the seed.
+ */
+export function groupIntoBeats(events: TimelineEvent[]): Beat[] {
+  const byPhase = new Map<string, TimelineEvent[]>();
+  for (const event of events) {
+    const key = event.phase ?? "";
+    const bucket = byPhase.get(key);
+    if (bucket) bucket.push(event);
+    else byPhase.set(key, [event]);
+  }
+  return [...byPhase.values()]
+    // order beats by their earliest event so the timeline reads front to back
+    .sort((a, b) => a[0]!.atSeconds - b[0]!.atSeconds)
+    .map((beatEvents) => ({
+      beat: beatEvents.find((e) => e.demoBeat !== undefined)?.demoBeat ?? 0,
+      phase: beatEvents.find((e) => e.phase)?.phase,
+      events: beatEvents,
+    }));
 }

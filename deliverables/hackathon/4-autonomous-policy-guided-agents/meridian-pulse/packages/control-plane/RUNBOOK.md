@@ -9,6 +9,8 @@ Two screens to keep open:
 
 The whole demo is driven automatically by the scenario timeline in [`seed/scenario-timeline.json`](../../seed/scenario-timeline.json) (240 seconds), replayed by the scenario driver embedded in `mcp-market-data`. The only manual interactions are the **Approve** click in Beat 3 and the **Resume** click in Beat 5 — everything else unfolds on its own.
 
+> **Presenting live?** Run in **manual mode** (`SCENARIO_MODE=manual pnpm demo`) and advance each beat yourself with `pnpm scenario:step` (press Enter per beat). The beats below map 1:1 to the stepper's five presses, so nothing fires until you introduce it. See the top-level `HOW-TO-DEMO.md` for the mapping. Timed mode (the default) plays on a clock and is best for rehearsal or an unattended run.
+
 ## Before you start
 
 Bring the whole system up with one command from the repo root:
