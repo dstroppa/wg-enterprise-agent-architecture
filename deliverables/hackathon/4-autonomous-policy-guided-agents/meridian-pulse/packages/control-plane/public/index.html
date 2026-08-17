@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meridian Pulse — Operator Control</title>
+    <style>
+      :root {
+        --bg: #0b0e14; --panel: #151a23; --line: #232a36; --text: #d7dde8;
+        --muted: #8792a6; --green: #35c46b; --amber: #e6a12b; --orange: #e6772b;
+        --red: #e6483d; --accent: #4a9eff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--text);
+        font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      header {
+        display: flex; align-items: center; gap: 16px; padding: 14px 20px;
+        border-bottom: 1px solid var(--line); background: var(--panel);
+      }
+      header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+      .pulse {
+        width: 12px; height: 12px; border-radius: 50%; background: var(--green);
+        box-shadow: 0 0 0 0 rgba(53,196,107,.6); animation: beat 1.4s infinite;
+      }
+      .pulse.halted { background: var(--red); animation: none; }
+      @keyframes beat {
+        0% { box-shadow: 0 0 0 0 rgba(53,196,107,.6); }
+        70% { box-shadow: 0 0 0 10px rgba(53,196,107,0); }
+        100% { box-shadow: 0 0 0 0 rgba(53,196,107,0); }
+      }
+      .status-word { font-weight: 600; }
+      .status-word.running { color: var(--green); }
+      .status-word.halted { color: var(--red); }
+      .spacer { flex: 1; }
+      main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 20px; }
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+      .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; }
+      .metric-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+      .metric-row:last-child { border-bottom: none; }
+      .metric-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+      .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 4px; }
+      .bar > span { display: block; height: 100%; background: var(--accent); }
+      .bar.warn > span { background: var(--amber); }
+      .bar.danger > span { background: var(--red); }
+      .level { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+      .level.NORMAL { background: rgba(53,196,107,.15); color: var(--green); }
+      .level.MINOR { background: rgba(230,161,43,.15); color: var(--amber); }
+      .level.SIGNIFICANT { background: rgba(230,119,43,.15); color: var(--orange); }
+      .level.EXTREME { background: rgba(230,72,61,.2); color: var(--red); }
+      button { font: inherit; border: none; border-radius: 8px; padding: 9px 16px; cursor: pointer; font-weight: 600; }
+      .kill { background: var(--red); color: #fff; }
+      .resume { background: var(--green); color: #06210f; }
+      .approve { background: var(--green); color: #06210f; padding: 5px 12px; }
+      .reject { background: var(--line); color: var(--text); padding: 5px 12px; }
+      .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      .controls input { flex: 1; min-width: 180px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 8px 10px; }
+      .esc { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+      .esc .sku { font-weight: 600; }
+      .esc .why { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+      .esc .tier { font-size: 12px; color: var(--orange); }
+      .empty { color: var(--muted); font-style: italic; }
+      .banner { display: none; padding: 10px 20px; background: rgba(230,72,61,.15); border-bottom: 1px solid var(--red); color: var(--red); font-weight: 600; }
+      .banner.show { display: block; }
+      .links { padding: 0 20px 20px; color: var(--muted); font-size: 13px; }
+      .links a { color: var(--accent); }
+      code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="pulse" id="pulse"></div>
+      <h1>Meridian Pulse</h1>
+      <span>Agent: <span class="status-word running" id="statusWord">running</span></span>
+      <span style="color: var(--muted)">cycle <span id="cycle">–</span></span>
+      <div class="spacer"></div>
+      <button class="kill" id="killBtn">■ KILL SWITCH</button>
+    </header>
+
+    <div class="banner" id="banner"></div>
+
+    <main>
+      <section class="panel">
+        <h2>Behavioral metrics</h2>
+        <div class="metric-row">
+          <span>Anomaly level</span>
+          <span class="metric-val"><span class="level NORMAL" id="anomalyLevel">NORMAL</span></span>
+        </div>
+        <div class="metric-row">
+          <span>Actions this hour</span>
+          <span class="metric-val"><span id="actionsHour">0</span> / 15</span>
+        </div>
+        <div class="bar" id="rateBar"><span style="width:0%"></span></div>
+        <div class="metric-row">
+          <span>Actions last 5 min</span>
+          <span class="metric-val"><span id="actions5m">0</span> / 5 (burst)</span>
+        </div>
+        <div class="metric-row">
+          <span>Revenue impact this hour</span>
+          <span class="metric-val">$<span id="magnitude">0</span> / $50k</span>
+        </div>
+        <div class="bar" id="magBar"><span style="width:0%"></span></div>
+        <div class="metric-row">
+          <span>Anomaly z-score</span>
+          <span class="metric-val" id="zscore">0</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Escalation queue — awaiting approval</h2>
+        <div id="escList"><div class="empty">No pending escalations.</div></div>
+      </section>
+    </main>
+
+    <div class="links">
+      Traces &amp; metrics dashboards: <a href="http://localhost:3001" target="_blank">Grafana</a>
+      (Tempo traces, Prometheus metrics, Loki logs) &nbsp;·&nbsp;
+      Full decision trail: <code>pnpm --filter @meridian-pulse/policy trail list</code>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let halted = false;
+
+      async function post(path, body) {
+        const r = await fetch(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body || {}),
+        });
+        return r.json();
+      }
+
+      $("killBtn").onclick = async () => {
+        if (!halted) {
+          await post("/agent/halt", { reason: "manual_kill_switch" });
+        } else {
+          const filter = prompt("Resume with optional data filter (blank for none):", "ignore competitor source FeedX for 5m");
+          await post("/agent/resume", { dataFilter: filter || null });
+        }
+      };
+
+      function render(state) {
+        const st = state.status || {};
+        const br = state.breakers || {};
+        halted = st.running === false;
+
+        $("pulse").classList.toggle("halted", halted);
+        const sw = $("statusWord");
+        sw.textContent = halted ? "halted" : "running";
+        sw.className = "status-word " + (halted ? "halted" : "running");
+        $("cycle").textContent = st.lastCycle ?? "–";
+        $("killBtn").textContent = halted ? "▶ RESUME" : "■ KILL SWITCH";
+        $("killBtn").className = halted ? "resume" : "kill";
+
+        const banner = $("banner");
+        if (halted) {
+          banner.textContent = "HALTED — reason: " + (st.haltReason || "unknown") +
+            (st.dataFilter ? "  ·  data filter: " + st.dataFilter : "");
+          banner.classList.add("show");
+        } else {
+          banner.classList.remove("show");
+        }
+
+        const lvl = br.level || "NORMAL";
+        const le = $("anomalyLevel");
+        le.textContent = lvl; le.className = "level " + lvl;
+        $("actionsHour").textContent = br.actionsThisHour ?? 0;
+        $("actions5m").textContent = br.actionsThis5Min ?? 0;
+        $("magnitude").textContent = Math.round(br.cumulativeRevenueImpactThisHour ?? 0).toLocaleString();
+        $("zscore").textContent = br.anomalyZScore ?? 0;
+
+        const rate = Math.min(100, ((br.actionsThisHour ?? 0) / 15) * 100);
+        const rb = $("rateBar"); rb.firstElementChild.style.width = rate + "%";
+        rb.className = "bar" + (rate > 90 ? " danger" : rate > 66 ? " warn" : "");
+        const mag = Math.min(100, ((br.cumulativeRevenueImpactThisHour ?? 0) / 50000) * 100);
+        const mb = $("magBar"); mb.firstElementChild.style.width = mag + "%";
+        mb.className = "bar" + (mag > 90 ? " danger" : mag > 66 ? " warn" : "");
+
+        const esc = state.pendingEscalations || [];
+        const list = $("escList");
+        if (esc.length === 0) {
+          list.innerHTML = '<div class="empty">No pending escalations.</div>';
+        } else {
+          list.innerHTML = esc.map((a) => `
+            <div class="esc">
+              <div class="sku">${a.sku} &nbsp; $${a.currentPrice} → $${a.proposedPrice} (${a.changePct}%)</div>
+              <div class="why">${a.reason || ""}</div>
+              <div class="tier">${a.tierResult}</div>
+              <div style="margin-top:8px; display:flex; gap:8px;">
+                <button class="approve" onclick="approve('${a.id}')">Approve</button>
+                <button class="reject" onclick="reject('${a.id}')">Reject</button>
+              </div>
+            </div>`).join("");
+        }
+      }
+
+      window.approve = async (id) => { await post("/escalations/" + id + "/approve"); };
+      window.reject = async (id) => { await post("/escalations/" + id + "/reject"); };
+
+      const es = new EventSource("/events");
+      es.onmessage = (e) => { try { render(JSON.parse(e.data)); } catch {} };
+      es.onerror = () => { /* browser auto-reconnects */ };
+    </script>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local state / generated artifacts
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.jsonl
+!seed/**/*.jsonl
+
+# Env / secrets
+.env
+.env.local
+seed/identity/*.pem
+seed/identity/*.key
+seed/identity/agent-credential.json
+
+# OTel / traces
+infra/otel/traces.jsonl
+infra/otel/metrics.jsonl
+
+# OS
+.DS_Store
